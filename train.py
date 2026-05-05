@@ -55,6 +55,10 @@ PEAK_FLOPS_TABLE = {
     ((8, 9), 'fp32'): 82.6,
     ((9, 0), 'bf16'): 989.5,   # H100
     ((9, 0), 'fp32'): 67.0,
+    ((10, 0), 'bf16'): 2250.0, # B100/B200 (datacenter Blackwell, dense bf16) — from karpathy/autoresearch PR #547
+    ((12, 0), 'bf16'): 209.0,  # RTX 50xx (consumer Blackwell, dense bf16) — from karpathy/autoresearch PR #547
+    ((12, 1), 'bf16'): 213.0,  # GB10 Grace Blackwell (DGX Spark) — measured by schaferk/autoresearch-blackwell-gb10
+    ((12, 1), 'fp32'): 53.0,   # GB10 fp32 estimate (4x bf16 ratio per Blackwell tensor-core spec)
 }
 
 
