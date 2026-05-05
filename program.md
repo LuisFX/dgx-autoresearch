@@ -5,11 +5,16 @@ NVIDIA DGX Spark (GB10 Grace Blackwell, sm_121, aarch64). The agent runs
 overnight, mutating `train.py`, scoring `val_bpb`, keeping wins, discarding
 losses.
 
-> **You are running on a DGX Spark.** That's NVIDIA GB10 Grace Blackwell,
-> compute capability sm_121, 119 GiB Unified Memory Architecture, aarch64.
-> CUDA 13.0 in container. FlashAttention-3 is NOT used here (community
-> finding: PyTorch SDPA is ~2% faster on GB10). FA3 references in any
-> code suggest you've copied something old — replace with SDPA.
+> **You (the agent) run on the Mac. Training executes on the DGX Spark
+> remotely** via `bash sync/run.sh` (rsyncs current code to Spark, runs
+> `uv run train.py` there, pulls `run.log` back). Mac is git-authoritative;
+> Spark is a pure execution target with **no .git**, no commits.
+>
+> **The Spark is GB10 Grace Blackwell**, compute capability sm_121,
+> 119 GiB Unified Memory Architecture, aarch64, CUDA 13.0 in container.
+> FlashAttention-3 is NOT used here (community finding: PyTorch SDPA is
+> ~2% faster on GB10). FA3 references in any code suggest you've copied
+> something old — replace with SDPA.
 
 ---
 
@@ -26,8 +31,10 @@ To set up a new experiment, work with the user to:
    - `JOURNAL.md` — what we cherry-picked from where, why.
    - `prepare.py` — fixed constants, data prep, tokenizer, dataloader, evaluation. Do not modify.
    - `train.py` — the file you modify. Model architecture, optimizer, training loop.
-4. **Verify data exists**: Check that `~/.cache/autoresearch/` contains data
-   shards and a tokenizer. If not: `uv run prepare.py`.
+4. **Verify Spark setup (one-time)**: Run `bash sync/spark_setup.sh`. This
+   pushes current code to the Spark, installs `uv` if missing, runs
+   `uv sync` (PyTorch cu130 + deps), and runs `uv run prepare.py`
+   (downloads training data + builds tokenizer on Spark). Idempotent.
 5. **Initialize results.tsv**: Create `results.tsv` with just the header row.
    The baseline will be recorded after the first run.
 6. **Confirm and go**: Confirm setup looks good.
@@ -36,9 +43,17 @@ Once you get confirmation, kick off the experimentation.
 
 ## Experimentation
 
-Each experiment runs on a single GPU. The training script runs for a
-**fixed time budget of 5 minutes** (wall clock training time, excluding
-startup/compilation). Launch: `uv run train.py`.
+Each experiment runs on the **Spark's** single GB10 GPU. The training
+script runs for a **fixed time budget of 5 minutes** (wall clock training
+time, excluding startup/compilation). **You launch from Mac:** `bash sync/run.sh`.
+
+Internally `sync/run.sh` does:
+  1. `bash sync/push.sh` — rsync code Mac → Spark
+  2. `ssh spark uv run train.py > run.log` on the Spark
+  3. `bash sync/pull.sh latest` — rsync `run.log` + `exports/` back to Mac
+
+So one command does the round-trip. No git on Spark, no commits there.
+The `run.log` lands at the repo root on Mac.
 
 **What you CAN do:**
 - Modify `train.py` — this is the only file you edit. Everything is fair
@@ -128,20 +143,25 @@ correlate runs to code.
 
 Runs on a dedicated branch (e.g. `antidote/may4-gpu0`).
 
-LOOP FOREVER:
+LOOP FOREVER (all Mac-side except step 4's inner training):
 
-1. Look at git state: current branch/commit
-2. Tune `train.py` with an experimental idea — direct code edits
-3. `git commit`
-4. `uv run train.py > run.log 2>&1` (redirect everything; do NOT use tee
-   or let output flood your context)
-5. `grep "^val_bpb:\|^peak_vram_mb:" run.log`
+1. Look at git state on Mac: current branch/commit
+2. Tune `train.py` with an experimental idea — direct Mac-side code edits
+3. `git commit` (on Mac — Spark has no git)
+4. `bash sync/run.sh` — pushes code to Spark, runs `uv run train.py`
+   there, pulls `run.log` back to Mac. Wallclock ≈ 5 min training +
+   ~10s rsync + ~30s startup. **Do NOT pipe sync/run.sh through tee or
+   let output flood your context.**
+5. `grep "^val_bpb:\|^peak_vram_mb:" run.log` (on Mac, file just arrived)
 6. If empty, the run crashed: `tail -n 50 run.log` for stack trace.
    If it's a typo/import bug, fix and re-run. If the idea is broken,
    log "crash" and move on.
-7. Record results in `results.tsv` (do NOT commit the tsv)
+7. Record results in `results.tsv` on Mac (do NOT commit the tsv)
 8. If val_bpb improved (lower), advance the branch — keep the commit
 9. If val_bpb is equal or worse, `git reset` back
+
+**Note on Spark git: there is none.** `sync/push.sh` rsyncs files; never
+creates a git repo there. All version control is Mac-side.
 
 You're a completely autonomous researcher. Try things. If they work, keep.
 If they don't, discard. Advance the branch to iterate. Rewind sparingly.
@@ -234,14 +254,15 @@ back at depth=4 / dim=384 / batch=2^16, that's confirmation, not coincidence.
 
 ## Exporting models
 
-After training, export weights + config:
+After training, export weights + config. Pass extra args through
+`sync/run.sh` so they reach `train.py` on the Spark:
 
 ```bash
-# Train and export
-uv run train.py --export model.pth
+# Train and export — runs on Spark; export lands on Spark, then rsync'd back
+bash sync/run.sh -- --export model.pth
 
 # Train and export to a directory (auto-named by timestamp)
-uv run train.py --export-dir exports/
+bash sync/run.sh -- --export-dir exports/
 ```
 
 Export contents:
@@ -268,14 +289,17 @@ via Tailscale at `http://spark-28cb.tail462c57.ts.net:8088`. It hooks the
 
 ## Agent workflow (autopilot)
 
+The agent (you) runs on Mac. Each experiment is one `bash sync/run.sh`:
+
 ```bash
-# Run 10 experiments
+# Run 10 experiments — each round-trips Mac↔Spark
 for i in $(seq 1 10); do
-    uv run train.py --export-dir exports/ >> run.log 2>&1
+    bash sync/run.sh -- --export-dir exports/
     val_bpb=$(grep "^val_bpb:" run.log | tail -1 | awk '{print $2}')
-    echo "Run $i: val_bpb=$val_bpb"
+    echo "Run $i: val_bpb=$val_bpb  (commit $(git rev-parse --short HEAD))"
 done
 ```
 
-Or use `tooling/launch_agent.sh` (cherry-picked from schaferk) for a
-schaferk-shaped overnight run.
+The `tooling/launch_agent.sh` script from schaferk assumes Spark-local
+execution and would need adaptation before use here. For now stick with
+the Mac-side `sync/run.sh` wrapper.
