@@ -1,11 +1,11 @@
 [project]
-name = "litesearch"
+name = "dgx-autoresearch"
 version = "0.1.0"
-description = "Autonomous pretraining research for consumer GPUs"
+description = "Antidote's fork of Karpathy's autoresearch, tuned for NVIDIA DGX Spark (GB10 Grace Blackwell, sm_121, aarch64)"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "customtkinter>=5.2.0",
+    # Core training (from litesearch — FA3-free path via PyTorch SDPA)
     "matplotlib>=3.10.8",
     "numpy>=2.2.6",
     "pandas>=2.3.3",
@@ -14,14 +14,16 @@ dependencies = [
     "rustbpe>=0.1.0",
     "tiktoken>=0.11.0",
     "torch==2.9.1",
+    # Web UI (replaces litesearch's customtkinter — desktop-only doesn't fit headless DGX)
+    "streamlit>=1.39.0",
 ]
 
 [tool.uv.sources]
 torch = [
-    { index = "pytorch-cu128" },
+    { index = "pytorch-cu130" },
 ]
 
 [[tool.uv.index]]
-name = "pytorch-cu128"
-url = "https://download.pytorch.org/whl/cu128"
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
 explicit = true
