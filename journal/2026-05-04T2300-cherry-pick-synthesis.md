@@ -1,12 +1,11 @@
-# dgx-autoresearch — Journal
+# 2026-05-04T2300 — Cherry-pick synthesis: the `antidote/blackwell-may4` baseline
 
-> Most-recent entry on top. Tracks what we adopted from where, why, and
-> what we built ourselves. Companion to `README.md` (which describes
-> what the repo IS) and `program.md` (which is the agent prompt).
+> Companion to [`../README.LUISFX.md`](../README.LUISFX.md) (fork
+> operating model) and [`../program.md`](../program.md) (agent prompt).
+> Upstream README at [`../README.md`](../README.md) is preserved as-is
+> for clean upstream-rebase hygiene.
 
----
-
-## 2026-05-04 — Branch `antidote/blackwell-may4`: synthesis from upstream + community
+## Headline
 
 **TLDR:** Forked karpathy/autoresearch as `LuisFX/dgx-autoresearch`.
 Cherry-picked litesearch's GB10-applicable code (FA3→SDPA path, gradient
@@ -133,3 +132,44 @@ loop discovers may transfer to our SLM tuning later.
 
 The `antidote/blackwell-may4` branch is the canonical handoff point —
 all future research branches from here.
+
+---
+
+## Drift caught (later in the same session)
+
+While drafting `sync/push.sh`, I added a `git init -b antidote/blackwell-may4
+&& git add -A && git commit` block that would have created a divergent
+local git repo on the DGX. Operator caught it: **"BIG NO-NO!! MAJOR DRIFT!!"**
+
+The user's tenet (restated for permanence): **the DGX has zero git
+footprint.** Code on Mac, commits on Mac, scp/rsync to DGX as a pure
+execution target. No `.git`, no commits, no version control there. The
+agent runs on Mac and uses `bash sync/run.sh` to round-trip each
+training step (push code → ssh-train → pull `run.log`).
+
+Reverted in commit `0d93ad3`. Added `sync/run.sh` as the inner-loop
+wrapper. Updated `program.md` so all loop steps are Mac-side except the
+ssh-train inside `sync/run.sh` (commit `d5deaf0`).
+
+Lesson recorded for permanence: **Mac-authoritative is strict, not a
+suggestion.** Any pattern that would let the DGX drift from Mac is wrong
+regardless of what convenience it might offer.
+
+---
+
+## Layout reorganization (this commit)
+
+Two structural changes after the synthesis was complete:
+
+1. **Restored upstream `README.md` byte-for-byte** so future
+   `git fetch upstream && git rebase` is conflict-free on the most
+   convention-stable file in the repo.
+2. **Fork-side wisdom moved to two places**:
+   - [`../README.LUISFX.md`](../README.LUISFX.md) — operating model,
+     sync hygiene, layout map, diff vs upstream/community
+   - [`../journal/`](../journal/) — running narrative entries in
+     `{datetime}-{concept}.md` format (this file is the first one)
+
+This is the long-lived-fork hygiene pattern: never touch
+identity-stable upstream files; layer our additions in clearly-named
+sibling files; keep narrative in a timestamped journal/ subdir.

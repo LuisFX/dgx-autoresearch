@@ -1,125 +1,92 @@
-# dgx-autoresearch
+# autoresearch
 
-> Antidote's fork of [karpathy/autoresearch](https://github.com/karpathy/autoresearch),
-> tuned for the **NVIDIA DGX Spark (GB10 Grace Blackwell, sm_121, aarch64,
-> 119 GiB UMA)**. Synthesized with adaptations from
-> [schaferk/autoresearch-blackwell-gb10](https://github.com/schaferk/autoresearch-blackwell-gb10)
-> and [jlippp/litesearch](https://github.com/jlippp/litesearch).
+![teaser](progress.png)
 
-![teaser from upstream](progress.png)
+*One day, frontier AI research used to be done by meat computers in between eating, sleeping, having other fun, and synchronizing once in a while using sound wave interconnect in the ritual of "group meeting". That era is long gone. Research is now entirely the domain of autonomous swarms of AI agents running across compute cluster megastructures in the skies. The agents claim that we are now in the 10,205th generation of the code base, in any case no one could tell if that's right or wrong as the "code" is now a self-modifying binary that has grown beyond human comprehension. This repo is the story of how it all began. -@karpathy, March 2026*.
 
----
+The idea: give an AI agent a small but real LLM training setup and let it experiment autonomously overnight. It modifies the code, trains for 5 minutes, checks if the result improved, keeps or discards, and repeats. You wake up in the morning to a log of experiments and (hopefully) a better model. The training code here is a simplified single-GPU implementation of [nanochat](https://github.com/karpathy/nanochat). The core idea is that you're not touching any of the Python files like you normally would as a researcher. Instead, you are programming the `program.md` Markdown files that provide context to the AI agents and set up your autonomous research org. The default `program.md` in this repo is intentionally kept as a bare bones baseline, though it's obvious how one would iterate on it over time to find the "research org code" that achieves the fastest research progress, how you'd add more agents to the mix, etc. A bit more context on this project is here in this [tweet](https://x.com/karpathy/status/2029701092347630069) and [this tweet](https://x.com/karpathy/status/2031135152349524125).
 
-## What this is
+## How it works
 
-Karpathy's autoresearch — an AI agent overnight loop that mutates a
-single-GPU `train.py`, trains for 5 minutes, scores `val_bpb`, keeps
-wins, discards losses. Original idea: ~12 experiments per hour, ~100
-overnight, stable improvements as the agent finds GPU-specific wins.
+The repo is deliberately kept small and only really has three files that matter:
 
-This fork makes it work on the **DGX Spark** (which is *not* a stock
-NVIDIA GPU profile — it's GB10, sm_121, 119 GiB UMA, aarch64). The
-adaptations are all small surgical patches; we didn't rewrite anything.
+- **`prepare.py`** — fixed constants, one-time data prep (downloads training data, trains a BPE tokenizer), and runtime utilities (dataloader, evaluation). Not modified.
+- **`train.py`** — the single file the agent edits. Contains the full GPT model, optimizer (Muon + AdamW), and training loop. Everything is fair game: architecture, hyperparameters, optimizer, batch size, etc. **This file is edited and iterated on by the agent**.
+- **`program.md`** — baseline instructions for one agent. Point your agent here and let it go. **This file is edited and iterated on by the human**.
 
-For the full provenance — what was cherry-picked from where and why —
-see [`JOURNAL.md`](./JOURNAL.md).
+By design, training runs for a **fixed 5-minute time budget** (wall clock, excluding startup/compilation), regardless of the details of your compute. The metric is **val_bpb** (validation bits per byte) — lower is better, and vocab-size-independent so architectural changes are fairly compared.
 
-## How this differs from upstream
+If you are new to neural networks, this ["Dummy's Guide"](https://x.com/hooeem/status/2030720614752039185) looks pretty good for a lot more context.
 
-| Concern | Upstream | This fork |
-|---|---|---|
-| Attention | FlashAttention-3 (CUDA-only kernels) | PyTorch SDPA (~2% faster on GB10 per community benchmarks) |
-| FLOPS lookup for MFU | hard-coded H100 (989.5 TFLOPS) | per-compute-cap table inc. **sm_121: 213 TFLOPS** |
-| CUDA index | cu128 | cu130 |
-| `kernels` package | required | dropped |
-| GUI | (none) | Streamlit web UI on `:8088`, Tailscale-accessible (planned) |
-| Tooling | (basic) | schaferk's overnight tooling under `tooling/` |
-| Failure-mode guards in program.md | (basic loop discipline) | six numbered guards + Goodhart (G1-G6) |
+## Quick start
 
-## Layout
-
-```
-dgx-autoresearch/
-├── README.md          this file
-├── JOURNAL.md         what we cherry-picked from where, why
-├── program.md         the agent prompt (Karpathy + Antidote guards)
-├── train.py           the file the agent edits — model + optimizer + loop
-├── prepare.py         fixed: data prep + tokenizer + evaluation (don't edit)
-├── pyproject.toml     uv deps; cu130 index for Blackwell
-├── analysis.ipynb     upstream's analysis notebook
-├── results/           upstream's published reference results (don't edit)
-└── tooling/           schaferk's overnight tooling (launch_agent.sh,
-                       monitor.py, analyze.py, experiment_journal.py, ...)
-```
-
-## Quick start (DGX Spark)
+**Requirements:** A single NVIDIA GPU (tested on H100), Python 3.10+, [uv](https://docs.astral.sh/uv/).
 
 ```bash
-# 1. uv (one-time)
+
+# 1. Install uv project manager (if you don't already have it)
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# 2. clone
-cd ~ && git clone https://github.com/LuisFX/dgx-autoresearch.git
-cd dgx-autoresearch
-git checkout antidote/blackwell-may4
-
-# 3. deps + data prep
+# 2. Install dependencies
 uv sync
+
+# 3. Download data and train tokenizer (one-time, ~2 min)
 uv run prepare.py
 
-# 4. baseline smoke run (5 min)
+# 4. Manually run a single training experiment (~5 min)
 uv run train.py
-
-# expected on GB10:
-#   val_bpb ≈ 1.463 (matches schaferk reference baseline)
-#   peak_vram_mb ≈ 6,000–45,000 (depends on auto-config decisions)
-#   training_seconds ≈ 300
-
-# 5. launch the agent
-claude
-# at the prompt:
-# > Read program.md and JOURNAL.md, then kick off a new experiment
-# >   with the antidote/may4-gpu0 branch tag.
 ```
 
-## Reference baselines
+If the above commands all work ok, your setup is working and you can go into autonomous research mode.
 
-| Run | val_bpb start | val_bpb end | Wallclock | Source |
-|---|---|---|---|---|
-| schaferk overnight #1 | 1.463 | 1.135 (22.5% better) | 16 hr (151 experiments) | [schaferk repo](https://github.com/schaferk/autoresearch-blackwell-gb10) |
-| our antidote/blackwell-may4 #1 | TBD | TBD | TBD | (planned) |
+## Running the agent
 
-## Live monitor (planned)
+Simply spin up your Claude/Codex or whatever you want in this repo (and disable all permissions), then you can prompt something like:
 
-While running on DGX, the Streamlit web dashboard will be at:
+```
+Hi have a look at program.md and let's kick off a new experiment! let's do the setup first.
+```
 
-`http://spark-28cb.tail462c57.ts.net:8088`
+The `program.md` file is essentially a super lightweight "skill".
 
-Features (mirrors litesearch's gui.py concepts but web-native, no X11):
-- Live training-log tail (auto-scroll)
-- val_bpb over time chart
-- VRAM usage bar + GPU temp/power
-- results.tsv viewer (sortable, with win/loss badges)
-- "Try it" generate popup (calls `generate()` from train.py)
-- Config-slider hint generator (writes hint lines for program.md)
-- Start/Stop/Pause buttons (signals via `stop_event`)
-- Audit-capsule list per win
-- Git-diff viewer (what the agent changed since last keep)
+## Project structure
 
-## Acknowledgments
+```
+prepare.py      — constants, data prep + runtime utilities (do not modify)
+train.py        — model, optimizer, training loop (agent modifies this)
+program.md      — agent instructions
+pyproject.toml  — dependencies
+```
 
-- **[Andrej Karpathy](https://github.com/karpathy/autoresearch)** — the
-  original autoresearch design + the loop pattern
-- **[schaferk](https://github.com/schaferk/autoresearch-blackwell-gb10)**
-  — measured GB10 FLOPS, FA3-not-supported finding, overnight tooling,
-  16-hour reference run
-- **[jlippp](https://github.com/jlippp/litesearch)** — clean FA3→SDPA
-  swap, gradient checkpointing, IPC primitives (log_queue, stop_event),
-  compute_optimal_config, generate/export_model, CLI flags
-- **[lonexreb](https://github.com/karpathy/autoresearch/pull/547)** —
-  PR #547 introducing the per-compute-cap FLOPS lookup pattern; we
-  added the sm_121 row
+## Design choices
+
+- **Single file to modify.** The agent only touches `train.py`. This keeps the scope manageable and diffs reviewable.
+- **Fixed time budget.** Training always runs for exactly 5 minutes, regardless of your specific platform. This means you can expect approx 12 experiments/hour and approx 100 experiments while you sleep. There are two upsides of this design decision. First, this makes experiments directly comparable regardless of what the agent changes (model size, batch size, architecture, etc). Second, this means that autoresearch will find the most optimal model for your platform in that time budget. The downside is that your runs (and results) become not comparable to other people running on other compute platforms.
+- **Self-contained.** No external dependencies beyond PyTorch and a few small packages. No distributed training, no complex configs. One GPU, one file, one metric.
+
+## Platform support
+
+This code currently requires that you have a single NVIDIA GPU. In principle it is quite possible to support CPU, MPS and other platforms but this would also bloat the code. I'm not 100% sure that I want to take this on personally right now. People can reference (or have their agents reference) the full/parent nanochat repository that has wider platform support and shows the various solutions (e.g. a Flash Attention 3 kernels fallback implementation, generic device support, autodetection, etc.), feel free to create forks or discussions for other platforms and I'm happy to link to them here in the README in some new notable forks section or etc.
+
+Seeing as there seems to be a lot of interest in tinkering with autoresearch on much smaller compute platforms than an H100, a few extra words. If you're going to try running autoresearch on smaller computers (Macbooks etc.), I'd recommend one of the forks below. On top of this, here are some recommendations for how to tune the defaults for much smaller models for aspiring forks:
+
+1. To get half-decent results I'd use a dataset with a lot less entropy, e.g. this [TinyStories dataset](https://huggingface.co/datasets/karpathy/tinystories-gpt4-clean). These are GPT-4 generated short stories. Because the data is a lot narrower in scope, you will see reasonable results with a lot smaller models (if you try to sample from them after training).
+2. You might experiment with decreasing `vocab_size`, e.g. from 8192 down to 4096, 2048, 1024, or even - simply byte-level tokenizer with 256 possibly bytes after utf-8 encoding.
+3. In `prepare.py`, you'll want to lower `MAX_SEQ_LEN` a lot, depending on the computer even down to 256 etc. As you lower `MAX_SEQ_LEN`, you may want to experiment with increasing `DEVICE_BATCH_SIZE` in `train.py` slightly to compensate. The number of tokens per fwd/bwd pass is the product of these two.
+4. Also in `prepare.py`, you'll want to decrease `EVAL_TOKENS` so that your validation loss is evaluated on a lot less data.
+5. In `train.py`, the primary single knob that controls model complexity is the `DEPTH` (default 8, here). A lot of variables are just functions of this, so e.g. lower it down to e.g. 4.
+6. You'll want to most likely use `WINDOW_PATTERN` of just "L", because "SSSL" uses alternating banded attention pattern that may be very inefficient for you. Try it.
+7. You'll want to lower `TOTAL_BATCH_SIZE` a lot, but keep it powers of 2, e.g. down to `2**14` (~16K) or so even, hard to tell.
+
+I think these would be the reasonable hyperparameters to play with. Ask your favorite coding agent for help and copy paste them this guide, as well as the full source code.
+
+## Notable forks
+
+- [miolini/autoresearch-macos](https://github.com/miolini/autoresearch-macos) (MacOS)
+- [trevin-creator/autoresearch-mlx](https://github.com/trevin-creator/autoresearch-mlx) (MacOS)
+- [jsegov/autoresearch-win-rtx](https://github.com/jsegov/autoresearch-win-rtx) (Windows)
+- [andyluo7/autoresearch](https://github.com/andyluo7/autoresearch) (AMD)
 
 ## License
 
-Inherits Apache-2.0 from upstream karpathy/autoresearch.
+MIT
